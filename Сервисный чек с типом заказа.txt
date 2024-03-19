@@ -1,0 +1,507 @@
+@using System
+@using System.Collections.Generic
+@using System.Linq
+@using Resto.Front.PrintTemplates.Cheques.Razor
+@using Resto.Front.PrintTemplates.Cheques.Razor.TemplateModels
+
+@inherits TemplateBase<IServiceChequeBase>
+
+<doc bell="" formatter="split">
+  @if (Model is IServiceCheque)
+  {
+    @Service((IServiceCheque)Model)
+  }
+  else if (Model is IBanquetServiceCheque)
+  {
+    @Banquet((IBanquetServiceCheque)Model)
+  }
+  else if (Model is IDeleteProductsServiceCheque)
+  {
+    @DeleteProducts((IDeleteProductsServiceCheque)Model)
+  }
+  else if (Model is IDeleteModifiersServiceCheque)
+  {
+    @DeleteModifiers((IDeleteModifiersServiceCheque)Model)
+  }
+  else if (Model is IProductsServeCheque)
+  {
+    @ProductsServe((IProductsServeCheque)Model)
+  }
+  else if (Model is IWholeCourseServeCheque)
+  {
+    @WholeCourseServe((IWholeCourseServeCheque)Model)
+  }
+  else
+  {
+    throw new NotSupportedException(string.Format("Invalid model type '{0}'", Model.GetType()));
+  }
+</doc>
+
+@* Cheques begin *@
+@helper Service(IServiceCheque cheque)
+{
+  @Header(true)
+  @CourseGroups(cheque.Entries, true)
+  @Footer(cheque.IsRepeatPrint)
+}
+
+@helper Banquet(IBanquetServiceCheque cheque)
+{
+  @:@string.Format(Resources.BanquetNumberServiceChequeHeaderTemplate, cheque.Order.Reserve.Number)
+  <np />
+  @Header(true)
+  @CourseGroups(cheque.Entries, true)
+  @Footer(cheque.IsRepeatPrint)
+}
+
+@helper DeleteProducts(IDeleteProductsServiceCheque cheque)
+{
+  @Header(true)
+  <f2>
+    @string.Format(Resources.KitchenProductDeletedWarningPattern, cheque.DeleteReason)
+  </f2>
+  <np />
+  <np />
+  @CourseGroups(cheque.Entries, false)
+  @Footer(false)
+}
+
+@helper DeleteModifiers(IDeleteModifiersServiceCheque cheque)
+{
+  var modifiers = cheque.ModifierEntries.ToList();
+  var parent = GetParent(modifiers[0]);
+  var mixGroup = GetParent(parent).GetNotDeletedProductItemsByMix().Single(group => group.Contains(parent));
+
+  @Header(true)
+  <f2>
+    @string.Format(Resources.KitchenModifiersDeletedWarningPattern, cheque.DeleteReason)
+  </f2>
+  <np />
+  <np />
+  <f1>
+    <np />
+  </f1>
+  if (parent.Course != 1)
+  {
+    @CourseName(parent.Course)
+  }
+  if (mixGroup.Count == 1 && parent.CookingPlace != Model.CookingPlace && modifiers.Count == 1)
+  {
+    <f1>
+      @ModifierProductTable(modifiers[0], parent)
+      @string.Format(Resources.ParentProductForModifierPattern, parent.Product.FastCode + " " + parent.Product.GetKitchenOrDefaultName())
+    </f1>
+  }
+  else
+  {
+    @ModifiersTable(modifiers, parent)
+    <f0>
+      <np />
+      <center>
+        @Resources.ForDishTitle
+      </center>
+      <np />
+    </f0>
+    @ProductTable(parent)
+  }
+  @Footer(false)
+}
+
+@helper ProductsServe(IProductsServeCheque cheque)
+{
+  @Header(true)
+  <f2>
+    @Resources.TimeToServeDishes
+  </f2>
+  <np />
+  @CourseGroups(cheque.Entries, true)
+  @Footer(false)
+}
+
+@helper WholeCourseServe(IWholeCourseServeCheque cheque)
+{
+  @Header(false)
+  <f2>
+    @string.Format(Resources.TimeToServeCourseTemplate, cheque.Course)
+  </f2>
+  <np />
+  @Resources.SeeDetailsInCookingRequestText
+  <np />
+  @Footer(false)
+}
+@* Cheques end *@
+
+@helper CourseGroups(IEnumerable<IOrderEntry> entries, bool printBarcode)
+{
+  var productItems = entries.OfType<IProductItem>().ToList();
+  var modifierEntriesByParent = entries.OfType<IModifierEntry>().ToLookup(GetParent, _ => _);
+
+  var courseGroups = (
+    from guest in Model.Order.Guests
+    from mixGroup in guest.GetNotDeletedProductItemsByMix()
+    let mixEntries = new
+                     {
+                       ProductItems = productItems
+                         .Where(mixGroup.Contains)
+                         .OrderBy(productItem => productItem.OrderRank)
+                         .ToList(),
+                       ModifierEntriesByParent = modifierEntriesByParent
+                         .Where(g => mixGroup.Contains(g.Key))
+                         .OrderBy(g => g.Key.OrderRank)
+                         .ToList()
+                     }
+    where mixEntries.ProductItems.Any() || mixEntries.ModifierEntriesByParent.Any()
+    let course = mixGroup.Min(productItem => productItem.Course)
+    orderby course, guest.OrderRank, mixGroup.Min(productItem => productItem.OrderRank)
+    select new { Course = course, mixEntries.ProductItems, mixEntries.ModifierEntriesByParent } into courseWithEntries
+    group courseWithEntries by courseWithEntries.Course).ToList();
+
+  var nonStandardCourseUsed = courseGroups.Any(group => group.Key != 1);
+
+  foreach (var courseGroup in courseGroups)
+  {
+    <f1>
+      <np />
+    </f1>
+    if (nonStandardCourseUsed)
+    {
+      @CourseName(courseGroup.Key)
+    }
+    foreach (var mixGroup in courseGroup)
+    {
+      if (mixGroup.ProductItems.Any())
+      {
+        @MixedProducts(mixGroup.ProductItems, printBarcode)
+      }
+      foreach (var modifierEntryGroup in mixGroup.ModifierEntriesByParent)
+      {
+        foreach (var modifierEntry in modifierEntryGroup)
+        {
+          @ModifierProductTable(modifierEntry, modifierEntryGroup.Key)
+          @:@string.Format(Resources.ParentProductForModifierPattern, modifierEntryGroup.Key.Product.FastCode + " " + modifierEntryGroup.Key.Product.GetKitchenOrDefaultName())
+        }
+      }
+    }
+  }
+}
+
+@helper MixedProducts(IEnumerable<IProductItem> productItems, bool printBarcode)
+{
+  var counter = 0;
+  foreach (var productItem in productItems)
+  {
+    if (counter > 0)
+    {
+      @MixTable()
+    }
+    counter++;
+
+    @ProductTable(productItem)
+    @ModifiersTable(productItem)
+    if (printBarcode && Model.CookingPlace.PrintBarcodeInServiceCheque)
+    {
+      <center>
+        <barcode>
+          @productItem.ServiceChequeBarcode
+        </barcode>
+      </center>
+    }
+  }
+}
+
+@helper ProductTable(IProductItem product)
+{
+  <f1>
+    <table>
+      @TableColumns()
+      <cells>
+        @Product(product)
+      </cells>
+    </table>
+  </f1>
+}
+
+@helper Product(IProductItem product)
+{
+  if (Model.CookingPlace != product.CookingPlace)
+  {
+    <ct font="f0">
+      @product.Product.FastCode
+    </ct>
+  }
+  else
+  {
+    <ct>
+      @product.Product.FastCode
+    </ct>
+  }
+  <c>
+    @(Model.CookingPlace == product.CookingPlace
+        ? product.Product.GetKitchenOrDefaultName()
+        : string.Format(Resources.CookingPlaceTemplate, product.CookingPlace.Name, product.Product.GetKitchenOrDefaultName()))
+  </c>
+  <ct>
+    @FormatAmount(product.Amount)
+  </ct>
+}
+
+@helper ModifierProductTable(IModifierEntry modifier, IProductItem parent)
+{
+  var cookingPlace = modifier.CookingPlace;
+  
+  <f1>
+    <table>
+      @TableColumns()
+      <cells>
+        @if (Model.CookingPlace != cookingPlace)
+        {
+          <ct font="f0">
+            @modifier.Product.FastCode
+          </ct>
+        }
+        else
+        {
+          <ct>
+            @modifier.Product.FastCode
+          </ct>
+        }
+        <c>
+          @(Model.CookingPlace == cookingPlace
+              ? modifier.Product.GetKitchenOrDefaultName()
+              : string.Format(Resources.CookingPlaceTemplate, cookingPlace.Name, modifier.Product.GetKitchenOrDefaultName()))
+        </c>
+        <ct>
+          @FormatAmount(modifier.Amount)
+        </ct>
+      </cells>
+    </table>
+  </f1>
+}
+
+@helper ModifiersTable(IProductItem productItem)
+{
+  var commentText = productItem.Comment != null && !productItem.Comment.Deleted ? productItem.Comment.Text : null;
+  
+  var modifiers = productItem.ModifierEntries.Where(modifier => ModifiersFilter(modifier, productItem));
+
+  var childChoiceBindingsOfExistingModifiers = new HashSet<IChildModifier>(productItem.ModifierEntries
+    .Where(modifierEntry => modifierEntry.ChildModifier != null)
+    .Select(modifierEntry => modifierEntry.ChildModifier));
+
+  var zeroAmountModifiers =
+    from groupModifier in productItem.GroupModifiers
+    from childModifier in groupModifier.ChildModifiers
+    where childModifier.DefaultAmount > 0 &&
+          childModifier.HideIfDefaultAmount &&
+          !childChoiceBindingsOfExistingModifiers.Contains(childModifier)
+    select childModifier;
+
+  if (commentText == null && modifiers.IsEmpty() && zeroAmountModifiers.IsEmpty())
+  {
+    return;
+  }
+  
+  <f0>
+    <table>
+      @TableColumns()
+      <cells>
+        @if (commentText != null)
+        {
+          <ct />
+          <c>
+            @(Model.CookingPlace == productItem.CookingPlace
+                ? commentText
+                : string.Format(Resources.CookingPlaceTemplate, productItem.CookingPlace.Name, commentText))
+          </c>
+          <ct />
+        }
+        @Modifiers(modifiers, productItem)
+        @foreach (var zeroAmountModifier in zeroAmountModifiers)
+        {
+          var cookingPlace = zeroAmountModifier.Product.CookWithMainDish ? productItem.CookingPlace : zeroAmountModifier.CookingPlace;
+          <ct>
+            @zeroAmountModifier.Product.FastCode
+          </ct>
+          <c>
+            @(Model.CookingPlace == cookingPlace
+                ? zeroAmountModifier.Product.GetKitchenOrDefaultName()
+                : string.Format(Resources.CookingPlaceTemplate, cookingPlace.Name, zeroAmountModifier.Product.GetKitchenOrDefaultName()))
+          </c>
+          <ct>
+            @(zeroAmountModifier.AmountIndependentOfParentAmount
+                ? string.Format(Resources.KitchenModifierAbsoluteAmountPattern, 0m)
+                : string.Format(Resources.KitchenModifierAmountPattern, 0m))
+          </ct>
+        }
+      </cells>
+    </table>
+  </f0>
+}
+
+@helper ModifiersTable(IEnumerable<IModifierEntry> modifiers, IProductItem parent)
+{
+  <f0>
+    <table>
+      @TableColumns()
+      <cells>
+        @Modifiers(modifiers, parent)
+      </cells>
+    </table>
+  </f0>
+}
+
+@helper Modifiers(IEnumerable<IModifierEntry> modifiers, IProductItem parent)
+{
+  foreach (var modifier in modifiers)
+  {
+    var cookingPlace = modifier.CookingPlace;
+    <ct>
+      @modifier.Product.FastCode
+    </ct>
+    <c>
+      @(Model.CookingPlace == cookingPlace
+          ? modifier.Product.GetKitchenOrDefaultName()
+          : string.Format(Resources.CookingPlaceTemplate, cookingPlace.Name, modifier.Product.GetKitchenOrDefaultName()))
+    </c>
+    <ct>
+      @(modifier.IsAmountIndependentOfParentAmount()
+          ? string.Format(Resources.KitchenModifierAbsoluteAmountPattern, modifier.Amount)
+          : string.Format(Resources.KitchenModifierAmountPattern, modifier.Amount / parent.Amount))
+    </ct>
+  }
+}
+
+@helper Header(bool showGuestsCount)
+{
+  var order = Model.Order;
+  <whitespace-preserve>@string.Format(Resources.KitchenHeaderPattern,
+    FormatFullDateTime(Model.CommonInfo.CurrentTime),
+    order.Number, Model.PrinterCounter,
+    order.Waiter.GetNameOrEmpty())</whitespace-preserve>
+  <np />
+  <np />
+
+
+
+
+if (order.Type != null)  
+{<f2>* @order.Type.Name *</f2>
+ <np />
+  <np />
+
+}
+
+  <f1>
+    @if (showGuestsCount)
+    {
+      <split>
+        @string.Format(Resources.ServiceChequeHeaderLocationPattern, order.Table.Number, order.Table.Section.Name, order.Guests.Count())
+      </split>
+    }
+    else
+    {
+      @:@string.Format(Resources.KitchenTablePattern, order.Table.Number, order.Table.Section.Name)
+    }
+  </f1>
+  <np />
+  <np />
+}
+
+@helper Footer(bool isRepeatPrint)
+{
+  if (isRepeatPrint)
+  {
+    <np />
+    <f2>
+      @Resources.KitchenRepeated
+    </f2>
+    <np />
+  }
+  <np />
+  <np />
+}
+
+@helper MixTable()
+{
+  <table>
+    @TableColumns()
+    <cells>
+      <c />
+      <c>
+        @Resources.Mix
+      </c>
+      <c />
+    </cells>
+  </table>
+}
+
+@helper TableColumns()
+{
+  <columns>
+    <column autowidth="" minwidth="4" />
+    <column formatter="split" />
+    <column autowidth="" />
+  </columns>
+}
+
+@helper CourseName(int courseNumber)
+{
+  <f1>
+    @GetCourseTitle(courseNumber)
+  </f1>
+}
+
+@functions
+{
+  private string GetCourseTitle(int course)
+  {
+    switch (course)
+    {
+      case 0:
+        return Model is IServiceCheque || Model is IBanquetServiceCheque
+          ? Resources.KitchenCourseVipTitlePrefix + " " + Resources.KitchenCourseVipTitle
+          : Resources.KitchenCourseVipTitle;
+      case 1:
+        return Resources.KitchenCourse1Title;
+      case 2:
+        return Resources.KitchenCourse2Title;
+      case 3:
+        return Resources.KitchenCourse3Title;
+      default:
+        return Resources.KitchenCourse4Title;
+    }
+  }
+
+  private IProductItem GetParent(IModifierEntry modifierEntry)
+  {
+    return Model.Order.Guests
+      .SelectMany(guest => guest.Items.OfType<IProductItem>())
+      .Single(productItem => productItem.ModifierEntries.Contains(modifierEntry));
+  }
+
+  private IGuest GetParent(IProductItem productItem)
+  {
+    return Model.Order.Guests.Single(guest => guest.Items.Contains(productItem));
+  }
+
+  private static bool ModifiersFilter(IModifierEntry modifierEntry, IProductItem parent)
+  {
+    if (modifierEntry.DeletionInfo != null)
+      return false;
+
+    if (modifierEntry.ChildModifier == null)
+      return true;
+
+    if (modifierEntry.CookingPlaceType != parent.CookingPlaceType)
+      return true;
+
+    if (!modifierEntry.ChildModifier.HideIfDefaultAmount)
+      return true;
+
+    var amountPerItem = modifierEntry.ChildModifier.AmountIndependentOfParentAmount
+                                    ? modifierEntry.Amount
+                                    : modifierEntry.Amount / parent.Amount;
+
+    return amountPerItem != modifierEntry.ChildModifier.DefaultAmount;
+  }
+}
