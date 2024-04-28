@@ -32,6 +32,12 @@
     {
         @WholeCourseServe((IWholeCourseServeCheque)Model)
     }
+    else if (Model is ITableChangeServiceCheque)
+    {
+    }
+    else if (Model is IProductsMoveServiceCheque)
+    {
+    }
     else
     {
         throw new NotSupportedException(string.Format("Invalid model type '{0}'", Model.GetType()));
