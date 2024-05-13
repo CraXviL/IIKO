@@ -61,6 +61,7 @@
 
 @helper Banquet(IBanquetServiceCheque cheque)
 {
+    <np />    <np />
     @:@string.Format(Resources.BanquetNumberServiceChequeHeaderTemplate, cheque.Order.Reserve.Number)
     <np />
     @Header(true)
@@ -379,6 +380,7 @@
 
 @helper Header(bool showGuestsCount)
 {
+    <np />    <np />
     var order = Model.Order;
     <whitespace-preserve>@string.Format(Resources.KitchenHeaderPattern, FormatFullDateTime(Model.CommonInfo.CurrentTime), order.Number, Model.PrinterCounter, order.Waiter.GetNameOrEmpty())</whitespace-preserve>
     if (order.TabName != null)
@@ -409,7 +411,7 @@
         <f2>@Resources.KitchenRepeated</f2>
         <np />
     }
-    <np />
+    <np />    <np />    <np />
     <np />
 }
 
